@@ -10,6 +10,7 @@ CPMAddPackage("https://github.com/nothings/stb.git#f056911")
 CPMAddPackage("https://github.com/tinyobjloader/tinyobjloader.git@2.0.0rc13")
 CPMAddPackage("https://github.com/charles-lunarg/vk-bootstrap.git@1.4.313")
 CPMAddPackage("https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git@3.2.1")
+CPMAddPackage("https://github.com/zeux/volk.git#vulkan-sdk-1.4.309.0")
 
 set(CMAKE_C_STANDARD 20)
 set(CMAKE_CXX_STANDARD 20)
@@ -23,7 +24,8 @@ add_executable(${PROJECT_NAME})
 
 add_subdirectory(graphics)
 
-target_link_libraries(${PROJECT_NAME} PRIVATE spdlog glm SDL3-shared tinyobjloader vk-bootstrap VulkanMemoryAllocator)
+find_package(Vulkan REQUIRED)
+target_link_libraries(${PROJECT_NAME} PRIVATE Vulkan::Vulkan spdlog glm SDL3-shared tinyobjloader vk-bootstrap VulkanMemoryAllocator volk )
 target_include_directories(${PROJECT_NAME} PRIVATE ${imgui_SOURCE_DIR} ${stb_SOURCE_DIR})
 
 target_sources(${PROJECT_NAME} PRIVATE src/main.cpp)

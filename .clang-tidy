@@ -1,0 +1,18 @@
+#--------------------------------------------------------------------
+#  Alignment + tabs configuration
+#--------------------------------------------------------------------
+BasedOnStyle:      LLVM
+IndentWidth:       4            # logical indent = one tab stop
+TabWidth:          4            # tab renders as 4 columns  :contentReference[oaicite:0]{index=0}
+UseTab:            ForIndentation   # use real tab chars for indent, spaces elsewhere  :contentReference[oaicite:1]{index=1}
+
+ColumnLimit:       120          # optional, wrap limit
+
+# --- Alignment toggles ---------------------------------------------
+AlignConsecutiveAssignments:  true   # line-up '=' columns  :contentReference[oaicite:2]{index=2}
+AlignConsecutiveDeclarations: true   # line-up variable names/types  :contentReference[oaicite:3]{index=3}
+
+# --- (Nice-to-have) trailing comment alignment ---------------------
+AlignTrailingComments:
+  Kind:          Always
+  OverEmptyLines: 2
