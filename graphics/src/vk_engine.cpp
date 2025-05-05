@@ -6,12 +6,29 @@
 
 #include <VkBootstrap.h>
 
-#include <vk_initializers.h>
-#include <vk_types.h>
-
 #include <chrono>
 #include <thread>
 #include <vulkan/vulkan_core.h>
+
+#define VMA_IMPLEMENTATION
+#include "vk_mem_alloc.h"
+
+#include "vk_initializers.h"
+#include "vk_images.h"
+#include "vk_types.h"
+
+void DeletionQueue::add(std::function<void()> function) {
+	_deletionQueue.push_back(function);
+}
+
+void DeletionQueue::flush(VkDevice device) {
+    // Iterate in reverse
+	for (auto it = _deletionQueue.rbegin(); it != _deletionQueue.rend(); ++it) {
+		(*it)();
+	}
+	_deletionQueue.clear();
+}
+
 
 constexpr bool bUseValidationLayers = true;
 
@@ -43,6 +60,18 @@ void VulkanEngine::init() {
 
 void VulkanEngine::cleanup() {
   if (_isInitialized) {
+	  vkDeviceWaitIdle(this->_device);
+      for (uint32_t i = 0; i < FRAME_OVERLAP; i++) {
+          //already written from before
+          vkDestroyCommandPool(_device, _frames[i]._pool, nullptr);
+
+          //destroy sync objects
+          vkDestroyFence(_device, _frames[i]._renderFence, nullptr);
+          vkDestroySemaphore(_device, _frames[i]._renderSemaphore, nullptr);
+          vkDestroySemaphore(_device, _frames[i]._swapchainSemaphore, nullptr);
+		  _frames[i]._deletionQueue.flush(this->_device);
+      }
+	_mainDeletionQueue.flush(this->_device);
     destroy_swapchain();
 
     vkDestroySurfaceKHR(this->_instance, this->_surface, nullptr);
@@ -59,7 +88,76 @@ void VulkanEngine::cleanup() {
 }
 
 void VulkanEngine::draw() {
-  // nothing yet
+	vk_check(vkWaitForFences(this->_device, 1, &get_current_frame()._renderFence, true, 1000000000));
+	get_current_frame()._deletionQueue.flush(this->_device);
+	vk_check(vkResetFences(this->_device, 1, &get_current_frame()._renderFence));
+
+    uint32_t swapchainImageIndex;
+    vk_check(vkAcquireNextImageKHR(this->_device, this->_swapchain, 1000000000, get_current_frame()._swapchainSemaphore, nullptr, &swapchainImageIndex));
+
+
+	VkCommandBuffer cmd = get_current_frame()._buffer;
+	vk_check(vkResetCommandBuffer(cmd, 0));
+
+	VkCommandBufferBeginInfo cmdBeginInfo = vkinit::command_buffer_begin_info(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+
+	// set up the command buffer for rendering
+    _drawExtent.width = _drawImage.imageExtent.width;
+    _drawExtent.height = _drawImage.imageExtent.height;
+
+    vk_check(vkBeginCommandBuffer(cmd, &cmdBeginInfo));
+
+    // transition our main draw image into general layout so we can write into it
+    // we will overwrite it all so we dont care about what was the older layout
+    vkutil::transition_image(cmd, _drawImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+
+    draw_background(cmd);
+
+    //transition the draw image and the swapchain image into their correct transfer layouts
+    vkutil::transition_image(cmd, _drawImage.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    vkutil::transition_image(cmd, _swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+    // execute a copy from the draw image into the swapchain
+    vkutil::copy_image_to_image(cmd, _drawImage.image, _swapchainImages[swapchainImageIndex], _drawExtent, _swapchainExtent);
+
+    // set swapchain image layout to Present so we can show it on the screen
+    vkutil::transition_image(cmd, _swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+    //finalize the command buffer (we can no longer add commands, but it can now be executed)
+    vk_check(vkEndCommandBuffer(cmd));
+
+    VkCommandBufferSubmitInfo cmdinfo = vkinit::command_buffer_submit_info(cmd);
+
+    VkSemaphoreSubmitInfo waitInfo = vkinit::semaphore_submit_info(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, get_current_frame()._swapchainSemaphore);
+    VkSemaphoreSubmitInfo signalInfo = vkinit::semaphore_submit_info(VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, get_current_frame()._renderSemaphore);
+
+    VkSubmitInfo2 submit = vkinit::submit_info(&cmdinfo, &signalInfo, &waitInfo);
+
+    //submit command buffer to the queue and execute it.
+    // _renderFence will now block until the graphic commands finish execution
+    vk_check(vkQueueSubmit2(_graphicsQueue, 1, &submit, get_current_frame()._renderFence));
+
+    VkPresentInfoKHR presentInfo = {};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.pNext = nullptr;
+    presentInfo.pSwapchains = &_swapchain;
+    presentInfo.swapchainCount = 1;
+
+    presentInfo.pWaitSemaphores = &get_current_frame()._renderSemaphore;
+    presentInfo.waitSemaphoreCount = 1;
+
+    presentInfo.pImageIndices = &swapchainImageIndex;
+
+    vk_check(vkQueuePresentKHR(_graphicsQueue, &presentInfo));
+
+    //increase the number of frames drawn
+    _frameNumber++;
+}
+
+void VulkanEngine::draw_background(VkCommandBuffer cmd) {
+	VkClearColorValue clearColor = { 0.0f, 0.5f, 0.0f, 1.0f };
+	VkImageSubresourceRange range = vkinit::image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+	vkCmdClearColorImage(cmd, this->_drawImage.image, VK_IMAGE_LAYOUT_GENERAL, &clearColor, 1, &range);
 }
 
 void VulkanEngine::run() {
@@ -159,13 +257,54 @@ void VulkanEngine::init_vulkan() {
   this->_device = vkb_device.device;
   this->_chosenGPU = physical_device.physical_device;
 
-  // Initialize Swap Chain
+  _graphicsQueue = vkb_device.get_queue(vkb::QueueType::graphics).value();
+  _graphicsQueueFamily =
+	  vkb_device.get_queue_index(vkb::QueueType::graphics).value();
+
+  VmaAllocatorCreateInfo allocatorInfo = {};
+  allocatorInfo.physicalDevice = this->_chosenGPU;
+  allocatorInfo.device = this->_device; 
+  allocatorInfo.instance = this->_instance;
+  allocatorInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+  vmaCreateAllocator(&allocatorInfo, &_allocator);
+  _mainDeletionQueue.add([=]() {
+    vmaDestroyAllocator(_allocator);
+    });   
 }
+
 void VulkanEngine::init_swapchain() {
-  create_swapchain(_windowExtent.width, _windowExtent.height);
+    create_swapchain(_windowExtent.width, _windowExtent.height);
+    VkExtent3D drawImageExtent = {
+        .width = _windowExtent.width,
+        .height = _windowExtent.height,
+        .depth = 1,
+    };
+    _drawImage.imageFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    _drawImage.imageExtent = drawImageExtent;
+
+    VkImageUsageFlags drawImageUsages = {};
+    drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	drawImageUsages |= VK_IMAGE_USAGE_STORAGE_BIT;
+	drawImageUsages |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+    VkImageCreateInfo rimg_info = vkinit::image_create_info(_drawImage.imageFormat, drawImageUsages, drawImageExtent);
+    
+	VmaAllocationCreateInfo rimg_alloc_info = {};
+	rimg_alloc_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    rimg_alloc_info.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+	vmaCreateImage(_allocator, &rimg_info, &rimg_alloc_info, &_drawImage.image, &_drawImage.allocation, nullptr);
+
+	VkImageViewCreateInfo rview_info = vkinit::imageview_create_info(_drawImage.imageFormat, _drawImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
+
+	vk_check(vkCreateImageView(this->_device, &rview_info, nullptr, &_drawImage.imageView));
+	_mainDeletionQueue.add([=]() {
+		vkDestroyImageView(this->_device, _drawImage.imageView, nullptr);
+		vmaDestroyImage(_allocator, _drawImage.image, _drawImage.allocation);
+		});
+
 }
-void VulkanEngine::init_commands() {}
-void VulkanEngine::init_sync_structures() {}
 
 void VulkanEngine::create_swapchain(uint32_t width, uint32_t height) {
   vkb::SwapchainBuilder swapchain_builder{this->_chosenGPU, this->_device,
@@ -193,4 +332,28 @@ void VulkanEngine::destroy_swapchain() {
   for (auto &image_view : this->_swapchainImageViews) {
     vkDestroyImageView(this->_device, image_view, nullptr);
   }
+}
+
+void VulkanEngine::init_commands() {
+	VkCommandPoolCreateInfo commandPoolInfo = vkinit::command_pool_create_info(_graphicsQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
+    for (uint32_t i = 0; i < FRAME_OVERLAP; i++) {
+		vk_check(vkCreateCommandPool(this->_device, &commandPoolInfo, nullptr, &_frames[i]._pool));
+		VkCommandBufferAllocateInfo cmdAllocInfo = vkinit::command_buffer_allocate_info(_frames[i]._pool, 1);
+		vk_check(vkAllocateCommandBuffers(this->_device, &cmdAllocInfo, &_frames[i]._buffer));
+    }
+}
+
+void VulkanEngine::init_sync_structures() {
+	VkFenceCreateInfo fenceInfo = vkinit::fence_create_info(VK_FENCE_CREATE_SIGNALED_BIT);
+	VkSemaphoreCreateInfo semaphoreInfo = vkinit::semaphore_create_info();
+
+	for (uint32_t i = 0; i < FRAME_OVERLAP; i++) {
+		vk_check(vkCreateFence(this->_device, &fenceInfo, nullptr, &_frames[i]._renderFence));
+		vk_check(vkCreateSemaphore(this->_device, &semaphoreInfo, nullptr, &_frames[i]._swapchainSemaphore));
+		vk_check(vkCreateSemaphore(this->_device, &semaphoreInfo, nullptr, &_frames[i]._renderSemaphore));
+	}
+}
+
+FrameData& VulkanEngine::get_current_frame() {
+	return _frames[_frameNumber % FRAME_OVERLAP];
 }
