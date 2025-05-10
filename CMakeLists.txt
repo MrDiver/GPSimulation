@@ -91,7 +91,8 @@ add_link_options($<$<CONFIG:Debug>:${DEV_SANITIZERS}>)
 # --- HLSL to SPIR-V compile function --------------------------------
 function(compile_hlsl_to_spirv shader_name shader_file stage entry)
     get_filename_component(file_we ${shader_file} NAME_WE)
-    set(output_spv "${CMAKE_CURRENT_BINARY_DIR}/${file_we}_${stage}.spv")
+    set(output_spv "${CMAKE_CURRENT_BINARY_DIR}/shaders/${file_we}_${stage}.spv")
+    message(STATUS "Compiling ${shader_file} (${stage}) to SPIR-V: ${output_spv}")
 
     add_custom_command(
         OUTPUT ${output_spv}
@@ -113,5 +114,27 @@ function(compile_hlsl_to_spirv shader_name shader_file stage entry)
     add_dependencies(${PROJECT_NAME} ${shader_name})
 endfunction()
 
+function(compile_glsl_to_spirv shader_name shader_file stage entry)
+    get_filename_component(file_we ${shader_file} NAME_WE)
+    set(output_spv "${CMAKE_CURRENT_BINARY_DIR}/shaders/${file_we}_${stage}.spv")
+    message(STATUS "Compiling ${shader_file} (${stage}) to SPIR-V: ${output_spv}")
+
+    add_custom_command(
+        OUTPUT ${output_spv}
+        COMMAND glslangValidator
+                -V
+                -o ${output_spv}
+                ${shader_file}
+        DEPENDS ${shader_file}
+        COMMENT "Compiling ${shader_file} (${stage}) to SPIR-V"
+        VERBATIM
+    )
+
+    # Group shaders in a common target
+    add_custom_target(${shader_name} DEPENDS ${output_spv})
+    add_dependencies(${PROJECT_NAME} ${shader_name})
+endfunction()
+
 # --- HLSL to SPIR-V compile commands --------------------------------
 compile_hlsl_to_spirv("basic_compute" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/basic.hlsl" "cs" "main")
+compile_glsl_to_spirv("gradient_compute" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/gradient.comp" "cs" "main")

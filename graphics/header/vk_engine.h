@@ -1,5 +1,6 @@
 #pragma once
 
+#include "vk_descriptors.h"
 #include "vk_types.h"
 
 constexpr unsigned int FRAME_OVERLAP = 2;
@@ -29,11 +30,20 @@ struct FrameData {
 
 class VulkanEngine {
 public:
-	VmaAllocator _allocator; // Vulkan Memory Allocator
+  VmaAllocator _allocator; // Vulkan Memory Allocator
 
-	//draw resources
-	AllocatedImage _drawImage;
-	VkExtent2D _drawExtent;
+  // Pipelines
+  VkPipeline _gradientPipeline;
+  VkPipelineLayout _gradientPipelineLayout;
+
+  // Descriptor Pool
+  DescriptorAllocator globalDescriptorAllocator;
+
+  VkDescriptorSet _drawImageDescriptors;
+  VkDescriptorSetLayout _drawImageDescriptorLayout;
+  // draw resources
+  AllocatedImage _drawImage;
+  VkExtent2D _drawExtent;
 
   VkInstance _instance;                      // Vulkan library handle
   VkDebugUtilsMessengerEXT _debug_messenger; // Vulkan debug output handle
@@ -75,6 +85,10 @@ private:
   void init_swapchain();
   void init_commands();
   void init_sync_structures();
+  void init_descriptors();
+
+  void init_pipelines();
+  void init_background_pipelines();
 
   void create_swapchain(uint32_t width, uint32_t height);
   void destroy_swapchain();
