@@ -12,6 +12,8 @@ CPMAddPackage("https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
 CPMAddPackage("https://github.com/zeux/volk.git#vulkan-sdk-1.4.309.0")
 CPMAddPackage(NAME SDL URL https://github.com/libsdl-org/SDL/releases/download/release-3.2.10/SDL3-3.2.10.zip OPTIONS "SDL_STATIC ON" )
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 find_program(DXC_EXECUTABLE NAMES dxc HINTS "$ENV{VULKAN_SDK}/Bin")
 
 if(NOT DXC_EXECUTABLE)
